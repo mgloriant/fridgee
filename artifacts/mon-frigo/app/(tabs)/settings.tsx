@@ -87,11 +87,10 @@ export default function SettingsScreen() {
 
     if (error || !data) {
       setCreating(false);
+      console.error("[createFridge] Supabase error:", JSON.stringify(error));
       Alert.alert(
-        "Erreur",
-        error?.message?.includes("relation")
-          ? "Les tables Supabase n'existent pas encore. Veuillez exécuter le fichier supabase-schema.sql dans votre dashboard Supabase."
-          : (error?.message ?? "Impossible de créer le frigo. Vérifiez votre connexion.")
+        "Erreur création frigo",
+        error?.message ?? error?.code ?? "Erreur inconnue — vérifiez la console."
       );
       return;
     }
