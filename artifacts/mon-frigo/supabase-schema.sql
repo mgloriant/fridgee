@@ -135,12 +135,10 @@ CREATE POLICY "fridge_members_insert" ON fridge_members
     OR auth.uid() = user_id  -- allow self-insert (when owner creates the fridge)
   );
 
--- Members can read members of their fridges
+-- Each user can see their own membership rows (avoids recursive self-join)
 CREATE POLICY "fridge_members_select" ON fridge_members
   FOR SELECT
-  USING (
-    fridge_id IN (SELECT fridge_id FROM fridge_members fm2 WHERE fm2.user_id = auth.uid())
-  );
+  USING (user_id = auth.uid());
 
 -- Owner can remove members
 CREATE POLICY "fridge_members_delete" ON fridge_members
