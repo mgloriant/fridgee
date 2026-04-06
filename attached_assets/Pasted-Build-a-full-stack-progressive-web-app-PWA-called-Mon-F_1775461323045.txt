@@ -1,0 +1,298 @@
+Build a full-stack progressive web app (PWA) called "Mon Frigo" using React (Vite) 
+for the frontend and Supabase for all backend needs (PostgreSQL database, 
+authentication, real-time, and file storage). The app name "Mon Frigo" must be 
+centralized in a single config file (src/config.js) so it can be changed easily.
+
+The app must be fully responsive and optimized for mobile use. It must be 
+installable as a PWA on any smartphone (iOS and Android) via a Service Worker. 
+The UI language must support full internationalization (i18n) using i18next, with 
+automatic browser language detection. Provide at minimum French and English 
+translations, with the architecture ready for more languages.
+
+---
+
+## TECH STACK
+
+- Frontend: React 18 + Vite + React Router v6
+- UI: Tailwind CSS with a giant refrigerator visual theme (cold blues, whites, 
+  steel grays, frosted glass effects)
+- State management: Zustand
+- Backend: Supabase (auth, PostgreSQL, realtime subscriptions, storage)
+- OCR: Tesseract.js (in-browser, for expiry date extraction from photos)
+- Barcode scanning: react-zxing or QuaggaJS (camera-based, no photo trigger 
+  needed, continuous scanning like Yuka)
+- Notifications: Web Push API via Service Worker + Resend.com for email 
+  notifications
+- i18n: i18next + react-i18next with browser language auto-detection
+- Image storage: Supabase Storage buckets
+
+---
+
+## SUPABASE DATABASE SCHEMA
+
+Create the following tables:
+
+### users (managed by Supabase Auth)
+- id (uuid, PK)
+- email
+- notification_time (time, default 18:00)
+- notification_days (int[], default all days)
+- notification_methods (text[], default ['push', 'email'])
+- notification_delay_days (int, default 2)
+- language (text)
+- created_at
+
+### fridges
+- id (uuid, PK)
+- name (text)
+- color (text)
+- icon (text)
+- owner_id (uuid, FK → users)
+- created_at
+
+### fridge_members
+- id (uuid, PK)
+- fridge_id (uuid, FK → fridges)
+- user_id (uuid, FK → users)
+- role (text: 'owner' | 'member')
+- created_at
+
+### fridge_invitations
+- id (uuid, PK)
+- fridge_id (uuid, FK → fridges)
+- invited_email (text)
+- invited_by (uuid, FK → users)
+- status (text: 'pending' | 'accepted' | 'declined')
+- token (uuid, unique)
+- created_at
+
+### scan_sessions
+- id (uuid, PK)
+- fridge_id (uuid, FK → fridges)
+- user_id (uuid, FK → users)
+- created_at
+
+### scanned_items
+- id (uuid, PK)
+- session_id (uuid, FK → scan_sessions)
+- fridge_id (uuid, FK → fridges)
+- barcode (text)
+- product_name (text)
+- brand (text)
+- description (text)
+- image_url (text)
+- dlc_photo_url (text)
+- expiry_date (date)
+- purchase_date (date)
+- quantity (int, default 1)
+- consumed (boolean, default false)
+- consumed_at (timestamp)
+- consumed_by (uuid, FK → users)
+- created_at
+
+Enable Supabase Row Level Security (RLS) on all tables. Users can only access 
+fridges they own or are members of. Use Supabase Realtime on scanned_items and 
+fridges for live updates across shared fridge members.
+
+---
+
+## AUTHENTICATION
+
+- Email/password sign up and sign in via Supabase Auth
+- After sign in, redirect to the active fridge view (default screen)
+- Persist active fridge selection in Supabase user preferences and in Zustand store
+- Persist active scan session in Supabase and Zustand store
+- Email invitation flow: when a user is invited to a fridge, send an invitation 
+  email via Resend.com with a magic link. The link redirects to the app where the 
+  user can accept or decline the invitation after authentication.
+
+---
+
+## NAVIGATION
+
+Implement a fixed bottom navigation bar with 3 tabs:
+1. 🧊 Frigo actif (default screen)
+2. 📷 Sessions de scan
+3. ⚙️ Paramètres
+
+A floating action button (FAB) always visible on Frigo and Sessions screens allows 
+starting a new scan session instantly.
+
+---
+
+## SCREEN 1 — ACTIVE FRIDGE VIEW (default)
+
+- Header with a dropdown to select among all fridges the user belongs to. 
+  Selection is persisted in Supabase and Zustand.
+- The UI must visually evoke a giant refrigerator: frosted glass panels, cold 
+  color palette, subtle gradients.
+- Display the list of non-consumed scanned_items for the active fridge, grouped 
+  by unique (barcode + expiry_date) combinations.
+- Each item card shows:
+  - Product image (from Open Food Facts or Supabase Storage)
+  - Product name and brand
+  - Expiry date (formatted dd/mm/yyyy)
+  - Purchase date
+  - Quantity badge (if multiple occurrences of same product + same DLC)
+  - Color-coded urgency indicator: red (expires ≤ 1 day), orange (≤ 3 days), 
+    yellow (≤ 7 days), green (> 7 days)
+- Swipe left on an item to mark as consumed. If multiple occurrences exist, show 
+  a bottom sheet to select quantity and which DLC to consume. No free text input — 
+  only selectors and confirmations.
+- Tap on an item to navigate to the corresponding scan session. If multiple 
+  sessions contain this product, show a bottom sheet to select the session first.
+- Shake to undo the last consume action (use device accelerometer via 
+  DeviceMotionEvent).
+
+---
+
+## SCREEN 2 — SCAN SESSIONS LIST
+
+- List of all scan sessions for the user, sorted by date descending.
+- Each session shows: date, number of items scanned, fridge name.
+- Tap a session to see its items list.
+- Tap an item in a session to see its full detail: product name, brand, 
+  description, expiry date, product image, DLC photo, barcode.
+- Edit button on item detail: allows re-scanning barcode or entering it manually, 
+  changing expiry date, changing image (retake photo / pick from gallery / search 
+  web image via a URL input).
+- Expiry date always auto-formatted as dd/mm/yyyy. Slashes auto-inserted by the 
+  app.
+
+---
+
+## SCAN SESSION FLOW
+
+### Step 1 — Barcode scan
+- Open camera in continuous scan mode (like Yuka): no button press needed, 
+  barcode detected automatically using react-zxing or QuaggaJS.
+- On successful barcode detection:
+  - Play a cash register sound (use a royalty-free sound file bundled in /assets)
+  - Fetch product details from Open Food Facts API: 
+    https://world.openfoodfacts.org/api/v0/product/{barcode}.json
+  - Display product name, brand, image
+  - If product not found: play an error sound and show a manual entry form
+- Manual fallback form fields: barcode (text), product name (text), brand (text), 
+  image URL (text)
+
+### Step 2 — DLC photo
+- After barcode success, switch camera to photo capture mode
+- User photographs the expiry date label
+- Run Tesseract.js OCR on the captured image to extract the date
+- Parse and auto-format the detected date as dd/mm/yyyy
+- Display extracted date in an editable field (pre-filled)
+- If OCR fails or date is unreadable: leave field empty, let user type manually
+- Auto-insert slashes: typing "01" → "01/", typing "0101" → "01/01/", etc.
+
+### Step 3 — Item confirmation card
+- Show full item card: image, name, brand, description, expiry date
+- Two actions: ✅ "Valider et scanner le suivant" | ✏️ "Modifier"
+- Validated items are saved to scanned_items in Supabase and linked to the active 
+  session and active fridge
+
+### End of session
+- "J'ai terminé" button always visible during scan session
+- Leads to session recap: full list of scanned items with name, description, DLC
+- Session persists in Supabase even if the user closes the app mid-session
+
+---
+
+## SCREEN 3 — SETTINGS
+
+- Account section: display name, email, logout button
+- Fridges section:
+  - List of fridges owned or joined
+  - "Add fridge" button: define name, pick color from palette, pick icon from 
+    curated set (🧊❄️🥦🥕🍎🧀🥩🐟🍺🥛)
+  - For each owned fridge: share button (enter invitee email → send invite via 
+    Resend.com), list of current members with option to remove them
+  - For each joined fridge: option to leave the fridge
+  - Pending invitations received: show fridge name, inviter name, Accept / Decline 
+    buttons
+- Notification settings:
+  - Toggle push notifications on/off
+  - Toggle email notifications on/off
+  - Select notification time (time picker)
+  - Select notification days (multi-select: Mon–Sun)
+  - Select expiry alert delay (selector: 1, 2, 3, 5, 7 days before expiry)
+  - These settings stored in Supabase users table
+
+---
+
+## NOTIFICATIONS
+
+- Implement a Supabase Edge Function (cron) that runs daily and:
+  - Queries all scanned_items where expiry_date ≤ today + notification_delay_days 
+    and consumed = false
+  - Groups by user
+  - For each user: check their notification_time, notification_days, 
+    notification_methods
+  - Sends push notification via Web Push (VAPID keys stored in Supabase secrets)
+  - Sends email via Resend.com with:
+    - List of expiring items
+    - 3 recipe suggestions from Marmiton.org using the expiring product names as 
+      search terms (construct Marmiton search URLs: 
+      https://www.marmiton.org/recettes/recherche.aspx?eto=0&st={productName})
+- Default: every day at 18:00, 2 days before expiry, both push and email
+
+---
+
+## SOUNDS
+
+Bundle two audio files in /public/assets/sounds/:
+- success.mp3 — cash register sound (royalty-free)
+- error.mp3 — error beep sound (royalty-free)
+Play them via the Web Audio API. Preload on app start for instant playback during 
+scan sessions.
+
+---
+
+## PERFORMANCE REQUIREMENTS
+
+- Barcode scan must be near-instantaneous (continuous mode, no manual trigger)
+- Camera feed must not lag: use getUserMedia with optimal constraints
+- Tesseract.js must be initialized once on app start and reused (do not reload the 
+  worker on each scan)
+- Product fetch from Open Food Facts must be non-blocking (show a loading skeleton 
+  while fetching)
+- All Supabase queries must use indexes on fridge_id, session_id, expiry_date, 
+  consumed
+- Use React.lazy and Suspense for route-level code splitting
+
+---
+
+## PWA REQUIREMENTS
+
+- manifest.json with name "Mon Frigo", short_name "MonFrigo", theme color 
+  #1E3A5F, background color #F0F8FF
+- Service Worker with offline caching of app shell
+- Push notification subscription handled in Service Worker
+- App must be installable on iOS (Safari) and Android (Chrome)
+
+---
+
+## FOLDER STRUCTURE
+
+src/
+  config.js          ← app name, version, all global constants
+  i18n/              ← translation files (fr.json, en.json, ...)
+  store/             ← Zustand stores (auth, fridge, session)
+  supabase/          ← supabase client + all DB query functions
+  components/        ← shared UI components
+  screens/           ← one folder per screen
+  hooks/             ← custom hooks (useCamera, useBarcode, useOCR, useShake)
+  assets/            ← sounds, icons
+  service-worker.js
+
+---
+
+## IMPORTANT CONSTRAINTS
+
+- Never ask the user for free text input when a selector or button is sufficient
+- Expiry date input always auto-formats to dd/mm/yyyy with auto-slash insertion
+- Active fridge and active scan session must survive app close/reopen
+- All user data (preferences, fridge content, sessions, images) stored in Supabase
+- The app name "Mon Frigo" must only appear in src/config.js — never hardcoded 
+  elsewhere
+- Use environment variables (.env) for all API keys: Supabase URL, Supabase anon 
+  key, Resend API key, VAPID public key
