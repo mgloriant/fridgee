@@ -77,6 +77,7 @@ export default function SettingsScreen() {
   const handleCreateFridge = async () => {
     if (!newFridgeName.trim() || !user) return;
     setCreating(true);
+
     const { data, error } = await supabase.from("fridges").insert({
       name: newFridgeName.trim(),
       color: newFridgeColor,
@@ -84,13 +85,35 @@ export default function SettingsScreen() {
       owner_id: user.id,
     }).select().single();
 
-    if (!error && data) {
-      await supabase.from("fridge_members").insert({ fridge_id: data.id, user_id: user.id, role: "owner" });
-      await refreshFridges();
+    if (error || !data) {
+      setCreating(false);
+      Alert.alert(
+        "Erreur",
+        error?.message?.includes("relation")
+          ? "Les tables Supabase n'existent pas encore. Veuillez exécuter le fichier supabase-schema.sql dans votre dashboard Supabase."
+          : (error?.message ?? "Impossible de créer le frigo. Vérifiez votre connexion.")
+      );
+      return;
     }
+
+    const { error: memberError } = await supabase
+      .from("fridge_members")
+      .insert({ fridge_id: data.id, user_id: user.id, role: "owner" });
+
+    if (memberError) {
+      // rollback the fridge if member insert fails
+      await supabase.from("fridges").delete().eq("id", data.id);
+      setCreating(false);
+      Alert.alert("Erreur", memberError.message ?? "Impossible d'ajouter le membre.");
+      return;
+    }
+
+    await refreshFridges();
     setCreating(false);
     setShowCreateFridge(false);
     setNewFridgeName("");
+    setNewFridgeColor(FRIDGE_COLORS[0]);
+    setNewFridgeIcon(FRIDGE_ICONS[0]);
   };
 
   const handleInvite = async () => {

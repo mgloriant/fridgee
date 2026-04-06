@@ -41,22 +41,40 @@ export function FridgeProvider({ children }: { children: React.ReactNode }) {
 
   const refreshFridges = useCallback(async () => {
     if (!user) return;
-    const { data } = await supabase
-      .from("fridges")
-      .select("*, fridge_members!inner(user_id, role)")
-      .eq("fridge_members.user_id", user.id)
-      .order("created_at");
-    if (data) {
-      setFridges(data);
-      const savedId = await AsyncStorage.getItem(ACTIVE_FRIDGE_KEY);
-      const found = data.find((f: Fridge) => f.id === savedId);
-      if (found) {
-        setActiveFridgeState(found);
-      } else if (data.length > 0 && !activeFridge) {
-        setActiveFridgeState(data[0]);
-      }
+
+    // Step 1: get fridge IDs this user belongs to
+    const { data: memberRows, error: memberError } = await supabase
+      .from("fridge_members")
+      .select("fridge_id")
+      .eq("user_id", user.id);
+
+    if (memberError || !memberRows) return;
+
+    const fridgeIds = memberRows.map((r: { fridge_id: string }) => r.fridge_id);
+    if (fridgeIds.length === 0) {
+      setFridges([]);
+      return;
     }
-  }, [user, activeFridge]);
+
+    // Step 2: fetch those fridges
+    const { data: fridgeData, error: fridgeError } = await supabase
+      .from("fridges")
+      .select("*")
+      .in("id", fridgeIds)
+      .order("created_at");
+
+    if (fridgeError || !fridgeData) return;
+
+    setFridges(fridgeData);
+
+    const savedId = await AsyncStorage.getItem(ACTIVE_FRIDGE_KEY);
+    const found = fridgeData.find((f: Fridge) => f.id === savedId);
+    if (found) {
+      setActiveFridgeState(found);
+    } else if (fridgeData.length > 0) {
+      setActiveFridgeState(prev => prev ?? fridgeData[0]);
+    }
+  }, [user]);
 
   const refreshItems = useCallback(async () => {
     if (!activeFridge) return;
