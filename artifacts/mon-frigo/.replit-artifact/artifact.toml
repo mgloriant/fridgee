@@ -1,0 +1,27 @@
+kind = "mobile"
+previewPath = "/"
+title = "Mon Frigo"
+version = "1.0.0"
+id = "artifacts/mon-frigo"
+router = "expo-domain"
+
+[[integratedSkills]]
+name = "expo"
+version = "1.0.0"
+
+[[services]]
+ensurePreviewReachable = "/status"
+name = "expo"
+paths = [ "/" ]
+localPort = 25104
+
+[services.development]
+run = "pnpm --filter @workspace/mon-frigo run dev"
+
+[services.production]
+build = [ "pnpm", "--filter", "@workspace/mon-frigo", "run", "build" ]
+run = [ "pnpm", "--filter", "@workspace/mon-frigo", "run", "serve" ]
+
+[services.env]
+PORT = "25104"
+BASE_PATH = "/"
