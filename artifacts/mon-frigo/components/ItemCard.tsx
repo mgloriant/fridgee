@@ -43,13 +43,16 @@ function formatDate(dateStr?: string) {
 
 type Props = {
   item: ScannedItem;
+  groupCount?: number; // total quantity across grouped items
   onPress?: () => void;
   onSwipeConsume?: () => void;
 };
 
-export function ItemCard({ item, onPress, onSwipeConsume }: Props) {
+export function ItemCard({ item, groupCount, onPress, onSwipeConsume }: Props) {
   const colors = useColors();
   const daysLeft = getDaysUntilExpiry(item.expiry_date);
+  // Display the grouped count if provided, otherwise fall back to item.quantity
+  const displayCount = groupCount ?? item.quantity;
   const urgency = formatExpiryLabel(daysLeft, colors);
 
   const translateX = useSharedValue(0);
@@ -119,10 +122,10 @@ export function ItemCard({ item, onPress, onSwipeConsume }: Props) {
           </View>
         </View>
 
-        {item.quantity > 1 && (
+        {displayCount > 1 && (
           <View style={[styles.quantityBadge, { backgroundColor: colors.primary }]}>
             <Text style={[styles.quantityText, { color: colors.primaryForeground }]}>
-              ×{item.quantity}
+              ×{displayCount}
             </Text>
           </View>
         )}

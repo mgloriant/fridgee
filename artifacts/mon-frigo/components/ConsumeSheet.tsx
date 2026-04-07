@@ -9,17 +9,18 @@ import i18n from "@/i18n";
 
 type Props = {
   item: ScannedItem | null;
+  maxQuantity?: number; // override item.quantity for grouped items
   onConfirm: (quantity: number) => void;
   onClose: () => void;
 };
 
-export function ConsumeSheet({ item, onConfirm, onClose }: Props) {
+export function ConsumeSheet({ item, maxQuantity, onConfirm, onClose }: Props) {
   const colors = useColors();
   const [quantity, setQuantity] = useState(1);
 
   if (!item) return null;
 
-  const max = item.quantity;
+  const max = maxQuantity ?? item.quantity;
 
   return (
     <Modal visible transparent animationType="slide" onRequestClose={onClose}>

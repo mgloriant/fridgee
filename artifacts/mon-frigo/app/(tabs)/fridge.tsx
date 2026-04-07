@@ -19,14 +19,63 @@ import { FridgeSelector } from "@/components/FridgeSelector";
 import { ScannedItem } from "@/lib/supabase";
 import i18n from "@/i18n";
 
+// ── Grouping ──────────────────────────────────────────────────────────
+
+type GroupedItem = {
+  key: string;
+  representative: ScannedItem; // displayed item (best image, name, etc.)
+  items: ScannedItem[];        // all items in the group
+  totalQuantity: number;       // sum of quantity fields across items
+};
+
+function groupItems(items: ScannedItem[]): GroupedItem[] {
+  const map = new Map<string, ScannedItem[]>();
+
+  for (const item of items) {
+    // Group key: barcode (if available) or product name, combined with expiry date
+    const barcodeKey = item.barcode
+      ? `barcode:${item.barcode}`
+      : `name:${(item.product_name ?? "").toLowerCase().trim()}`;
+    const expiryKey = item.expiry_date ?? "none";
+    const key = `${barcodeKey}__${expiryKey}`;
+
+    if (!map.has(key)) map.set(key, []);
+    map.get(key)!.push(item);
+  }
+
+  const groups: GroupedItem[] = [];
+  for (const [key, groupItems] of map.entries()) {
+    // Representative = item with image, or first item
+    const representative =
+      groupItems.find(i => !!i.image_url) ?? groupItems[0];
+    const totalQuantity = groupItems.reduce((sum, i) => sum + (i.quantity ?? 1), 0);
+    groups.push({ key, representative, items: groupItems, totalQuantity });
+  }
+
+  // Sort: most urgent (soonest expiry) first, no-date items at end
+  groups.sort((a, b) => {
+    const da = a.representative.expiry_date;
+    const db = b.representative.expiry_date;
+    if (!da && !db) return 0;
+    if (!da) return 1;
+    if (!db) return -1;
+    return da.localeCompare(db);
+  });
+
+  return groups;
+}
+
 export default function FridgeScreen() {
   const colors = useColors();
   const insets = useSafeAreaInsets();
   const { fridges, activeFridge, items, loading, refreshFridges, refreshItems, markConsumed, undoLastConsume, lastConsumedItem } = useFridge();
   const { startSession } = useScan();
-  const [consumeItem, setConsumeItem] = useState<ScannedItem | null>(null);
+  const [consumeGroup, setConsumeGroup] = useState<GroupedItem | null>(null);
   const [undoVisible, setUndoVisible] = useState(false);
   const undoTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Grouped view
+  const groupedItems = groupItems(items);
 
   useShake(async () => {
     if (lastConsumedItem) {
@@ -36,18 +85,20 @@ export default function FridgeScreen() {
     }
   }, !!lastConsumedItem);
 
-  const handleConsume = useCallback(async (item: ScannedItem) => {
-    setConsumeItem(item);
+  const handleConsume = useCallback((group: GroupedItem) => {
+    setConsumeGroup(group);
   }, []);
 
   const confirmConsume = useCallback(async (quantity: number) => {
-    if (!consumeItem) return;
-    await markConsumed(consumeItem.id, quantity);
-    setConsumeItem(null);
+    if (!consumeGroup) return;
+    // Mark `quantity` items consumed — one DB call per item
+    const toConsume = consumeGroup.items.slice(0, quantity);
+    await Promise.all(toConsume.map(i => markConsumed(i.id, i.quantity ?? 1)));
+    setConsumeGroup(null);
     setUndoVisible(true);
     if (undoTimer.current) clearTimeout(undoTimer.current);
     undoTimer.current = setTimeout(() => setUndoVisible(false), 5000);
-  }, [consumeItem, markConsumed]);
+  }, [consumeGroup, markConsumed]);
 
   const handleStartScan = useCallback(async () => {
     const id = await startSession();
@@ -98,13 +149,13 @@ export default function FridgeScreen() {
         <ActivityIndicator color={colors.primary} style={{ marginTop: 40 }} />
       ) : (
         <FlatList
-          data={items}
-          keyExtractor={i => i.id}
+          data={groupedItems}
+          keyExtractor={g => g.key}
           contentContainerStyle={[
             styles.listContent,
             { paddingBottom: Platform.OS === "web" ? 120 : insets.bottom + 100 }
           ]}
-          scrollEnabled={items.length > 0}
+          scrollEnabled={groupedItems.length > 0}
           refreshControl={
             <RefreshControl
               refreshing={loading}
@@ -112,12 +163,16 @@ export default function FridgeScreen() {
               tintColor={colors.primary}
             />
           }
-          renderItem={({ item, index }) => (
+          renderItem={({ item: group, index }) => (
             <Animated.View entering={FadeIn.delay(index * 40).duration(300)}>
               <ItemCard
-                item={item}
-                onPress={() => router.push({ pathname: "/item/[id]", params: { id: item.id } })}
-                onSwipeConsume={() => handleConsume(item)}
+                item={group.representative}
+                groupCount={group.totalQuantity}
+                onPress={() => router.push({
+                  pathname: "/item/[id]",
+                  params: { id: group.representative.id },
+                })}
+                onSwipeConsume={() => handleConsume(group)}
               />
             </Animated.View>
           )}
@@ -151,9 +206,10 @@ export default function FridgeScreen() {
       <FAB onPress={handleStartScan} />
 
       <ConsumeSheet
-        item={consumeItem}
+        item={consumeGroup?.representative ?? null}
+        maxQuantity={consumeGroup?.totalQuantity}
         onConfirm={confirmConsume}
-        onClose={() => setConsumeItem(null)}
+        onClose={() => setConsumeGroup(null)}
       />
     </LinearGradient>
   );
