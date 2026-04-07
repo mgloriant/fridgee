@@ -19,7 +19,9 @@ function formatDate(dateStr?: string) {
 export default function ItemDetailScreen() {
   const colors = useColors();
   const insets = useSafeAreaInsets();
-  const { id } = useLocalSearchParams<{ id: string }>();
+  const { id, groupCount } = useLocalSearchParams<{ id: string; groupCount?: string }>();
+  // groupCount is passed from the fridge list when items are grouped
+  const displayQuantity = groupCount ? parseInt(groupCount, 10) : null;
   const [item, setItem] = useState<ScannedItem | null>(null);
   const [loading, setLoading] = useState(true);
 
@@ -93,7 +95,9 @@ export default function ItemDetailScreen() {
             </View>
             <View style={styles.metaCell}>
               <Text style={[styles.metaLbl, { color: colors.mutedForeground }]}>{i18n.t("fridge.quantity")}</Text>
-              <Text style={[styles.metaVal, { color: colors.foreground }]}>×{item.quantity}</Text>
+              <Text style={[styles.metaVal, { color: colors.foreground }]}>
+                ×{displayQuantity ?? item.quantity}
+              </Text>
             </View>
             {item.barcode && (
               <View style={styles.metaCell}>

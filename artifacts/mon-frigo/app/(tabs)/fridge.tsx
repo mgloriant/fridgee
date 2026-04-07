@@ -170,7 +170,7 @@ export default function FridgeScreen() {
                 groupCount={group.totalQuantity}
                 onPress={() => router.push({
                   pathname: "/item/[id]",
-                  params: { id: group.representative.id },
+                  params: { id: group.representative.id, groupCount: group.totalQuantity },
                 })}
                 onSwipeConsume={() => handleConsume(group)}
               />
