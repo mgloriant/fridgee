@@ -11,7 +11,7 @@ import { useAuth } from "@/contexts/AuthContext";
 import { useFridge } from "@/contexts/FridgeContext";
 import { supabase, Fridge, FridgeInvitation } from "@/lib/supabase";
 import i18n from "@/i18n";
-import { FRIDGE_COLORS, FRIDGE_ICONS, NOTIFICATION_DELAY_OPTIONS } from "@/config";
+import { API_BASE_URL, FRIDGE_COLORS, FRIDGE_ICONS, NOTIFICATION_DELAY_OPTIONS } from "@/config";
 
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
   const colors = useColors();
@@ -118,17 +118,66 @@ export default function SettingsScreen() {
   const handleInvite = async () => {
     if (!inviteEmail.trim() || !inviteFridge || !user) return;
     setInviting(true);
-    await supabase.from("fridge_invitations").insert({
+
+    const email = inviteEmail.trim().toLowerCase();
+    const token = Date.now().toString() + Math.random().toString(36).substr(2, 9);
+
+    // 1. Save invitation record in Supabase
+    const { error: dbError } = await supabase.from("fridge_invitations").insert({
       fridge_id: inviteFridge.id,
-      invited_email: inviteEmail.trim(),
+      invited_email: email,
       invited_by: user.id,
       status: "pending",
-      token: Date.now().toString() + Math.random().toString(36).substr(2, 9),
+      token,
     });
+
+    if (dbError) {
+      setInviting(false);
+      Alert.alert("Erreur", dbError.message ?? "Impossible d'enregistrer l'invitation.");
+      return;
+    }
+
+    // 2. Send email notification via API server
+    try {
+      const res = await fetch(`${API_BASE_URL}/invitations/send-email`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          invitedEmail: email,
+          inviterEmail: user.email,
+          fridgeName: inviteFridge.name,
+          fridgeIcon: inviteFridge.icon,
+        }),
+      });
+
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        // Email service not configured yet — invitation is still saved
+        if (res.status === 503) {
+          Alert.alert(
+            "Invitation enregistrée",
+            `L'invitation pour ${email} est enregistrée. Pour envoyer un email automatique, configurez la clé RESEND_API_KEY dans les secrets.`
+          );
+        } else {
+          Alert.alert(
+            "Invitation enregistrée",
+            `L'invitation est sauvegardée mais l'email n'a pas pu être envoyé : ${body.error ?? "erreur inconnue"}.`
+          );
+        }
+      } else {
+        Alert.alert("Invitation envoyée !", `Un email a été envoyé à ${email}.`);
+      }
+    } catch (fetchErr) {
+      // Network error calling the API — invitation is still in DB
+      Alert.alert(
+        "Invitation enregistrée",
+        `L'invitation est sauvegardée mais l'email n'a pas pu être envoyé (erreur réseau).`
+      );
+    }
+
     setInviting(false);
     setShowInviteModal(false);
     setInviteEmail("");
-    Alert.alert("Invitation envoyée !", `Invitation envoyée à ${inviteEmail}`);
   };
 
   const handleAcceptInvite = async (inv: FridgeInvitation) => {
