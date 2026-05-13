@@ -164,13 +164,13 @@ CREATE POLICY "invitations_select" ON fridge_invitations
   FOR SELECT
   USING (
     invited_by = auth.uid()
-    OR invited_email = auth.email()
+    OR invited_email = (auth.jwt() ->> 'email')
   );
 
 -- Recipient can update status (accept/decline)
 CREATE POLICY "invitations_update" ON fridge_invitations
   FOR UPDATE
-  USING (invited_email = auth.email() OR invited_by = auth.uid());
+  USING (invited_email = (auth.jwt() ->> 'email') OR invited_by = auth.uid());
 
 -- ============================================================
 -- SCAN SESSIONS POLICIES
