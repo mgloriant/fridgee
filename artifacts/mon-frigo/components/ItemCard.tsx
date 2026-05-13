@@ -114,9 +114,9 @@ export function ItemCard({ item, groupCount, onPress, onSwipeConsume }: Props) {
                 {urgency.label}
               </Text>
             </View>
-            {item.purchase_date ? (
+            {item.expiry_date ? (
               <Text style={[styles.date, { color: colors.mutedForeground }]}>
-                {formatDate(item.purchase_date)}
+                {formatDate(item.expiry_date)}
               </Text>
             ) : null}
           </View>
