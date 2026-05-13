@@ -189,7 +189,8 @@ export default function SettingsScreen() {
 
     if (dbError) {
       setInviting(false);
-      Alert.alert("Erreur", dbError.message ?? "Impossible d'enregistrer l'invitation.");
+      console.error("[handleInvite] Supabase error:", JSON.stringify(dbError, null, 2));
+      Alert.alert("Erreur", `${dbError.message}\n\ncode: ${dbError.code}\ndetails: ${dbError.details ?? "—"}`);
       return;
     }
 
