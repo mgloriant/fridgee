@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useState } from "react";
 import {
-  ActivityIndicator, Alert, FlatList, Modal, Platform, Pressable,
+  ActivityIndicator, Alert, Modal, Platform, Pressable,
   ScrollView, StyleSheet, Switch, Text, TextInput, TouchableOpacity, View
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -12,6 +12,15 @@ import { useFridge } from "@/contexts/FridgeContext";
 import { supabase, Fridge, FridgeInvitation } from "@/lib/supabase";
 import i18n from "@/i18n";
 import { API_BASE_URL, FRIDGE_COLORS, FRIDGE_ICONS, NOTIFICATION_DELAY_OPTIONS } from "@/config";
+import {
+  loadNotifSettings,
+  saveNotifSettings,
+  scheduleExpiryNotifications,
+  requestNotifPermission,
+  type NotifSettings,
+} from "@/lib/notifications";
+
+// ── Helpers ───────────────────────────────────────────────────────────
 
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
   const colors = useColors();
@@ -43,15 +52,24 @@ function Row({ icon, label, value, onPress, danger, last }: {
   );
 }
 
+// ── Main screen ───────────────────────────────────────────────────────
+
 export default function SettingsScreen() {
   const colors = useColors();
   const insets = useSafeAreaInsets();
   const { user, signOut } = useAuth();
-  const { fridges, refreshFridges } = useFridge();
+  const { fridges, items, refreshFridges } = useFridge();
+
   const [invitations, setInvitations] = useState<FridgeInvitation[]>([]);
-  const [notifDelay, setNotifDelay] = useState(2);
-  const [pushEnabled, setPushEnabled] = useState(true);
-  const [emailEnabled, setEmailEnabled] = useState(true);
+
+  // Notification settings — loaded from AsyncStorage on mount
+  const [notifSettings, setNotifSettings] = useState<NotifSettings>({
+    pushEnabled: true,
+    emailEnabled: false,
+    daysThreshold: 2,
+    notifHour: 19,
+  });
+
   const [showCreateFridge, setShowCreateFridge] = useState(false);
   const [newFridgeName, setNewFridgeName] = useState("");
   const [newFridgeColor, setNewFridgeColor] = useState(FRIDGE_COLORS[0]);
@@ -61,6 +79,46 @@ export default function SettingsScreen() {
   const [inviteFridge, setInviteFridge] = useState<Fridge | null>(null);
   const [inviteEmail, setInviteEmail] = useState("");
   const [inviting, setInviting] = useState(false);
+
+  // Load notification settings on mount
+  useEffect(() => {
+    loadNotifSettings().then(setNotifSettings);
+  }, []);
+
+  const applyNotifSettings = useCallback(async (next: NotifSettings) => {
+    setNotifSettings(next);
+    await saveNotifSettings(next);
+    await scheduleExpiryNotifications(items, next);
+  }, [items]);
+
+  const handlePushToggle = useCallback(async (value: boolean) => {
+    if (value) {
+      const granted = await requestNotifPermission();
+      if (!granted) {
+        Alert.alert(
+          i18n.t("settings.notifications.push"),
+          i18n.t("settings.notifications.permissionDenied")
+        );
+        return;
+      }
+    }
+    await applyNotifSettings({ ...notifSettings, pushEnabled: value });
+  }, [notifSettings, applyNotifSettings]);
+
+  const handleEmailToggle = useCallback(async (value: boolean) => {
+    await applyNotifSettings({ ...notifSettings, emailEnabled: value });
+  }, [notifSettings, applyNotifSettings]);
+
+  const handleDelayChange = useCallback(async (days: number) => {
+    await applyNotifSettings({ ...notifSettings, daysThreshold: days });
+  }, [notifSettings, applyNotifSettings]);
+
+  const handleHourChange = useCallback(async (delta: number) => {
+    const next = ((notifSettings.notifHour + delta) + 24) % 24;
+    await applyNotifSettings({ ...notifSettings, notifHour: next });
+  }, [notifSettings, applyNotifSettings]);
+
+  // ── Invitations ────────────────────────────────────────────────────
 
   const fetchInvitations = useCallback(async () => {
     if (!user) return;
@@ -73,6 +131,8 @@ export default function SettingsScreen() {
   }, [user]);
 
   useEffect(() => { fetchInvitations(); }, [fetchInvitations]);
+
+  // ── Fridge creation ────────────────────────────────────────────────
 
   const handleCreateFridge = async () => {
     if (!newFridgeName.trim() || !user) return;
@@ -87,11 +147,7 @@ export default function SettingsScreen() {
 
     if (error || !data) {
       setCreating(false);
-      console.error("[createFridge] Supabase error:", JSON.stringify(error));
-      Alert.alert(
-        "Erreur création frigo",
-        error?.message ?? error?.code ?? "Erreur inconnue — vérifiez la console."
-      );
+      Alert.alert("Erreur création frigo", error?.message ?? "Erreur inconnue.");
       return;
     }
 
@@ -100,7 +156,6 @@ export default function SettingsScreen() {
       .insert({ fridge_id: data.id, user_id: user.id, role: "owner" });
 
     if (memberError) {
-      // rollback the fridge if member insert fails
       await supabase.from("fridges").delete().eq("id", data.id);
       setCreating(false);
       Alert.alert("Erreur", memberError.message ?? "Impossible d'ajouter le membre.");
@@ -115,6 +170,8 @@ export default function SettingsScreen() {
     setNewFridgeIcon(FRIDGE_ICONS[0]);
   };
 
+  // ── Invitations ────────────────────────────────────────────────────
+
   const handleInvite = async () => {
     if (!inviteEmail.trim() || !inviteFridge || !user) return;
     setInviting(true);
@@ -122,7 +179,6 @@ export default function SettingsScreen() {
     const email = inviteEmail.trim().toLowerCase();
     const token = Date.now().toString() + Math.random().toString(36).substr(2, 9);
 
-    // 1. Save invitation record in Supabase
     const { error: dbError } = await supabase.from("fridge_invitations").insert({
       fridge_id: inviteFridge.id,
       invited_email: email,
@@ -137,7 +193,6 @@ export default function SettingsScreen() {
       return;
     }
 
-    // 2. Send email notification via API server
     try {
       const res = await fetch(`${API_BASE_URL}/invitations/send-email`, {
         method: "POST",
@@ -152,27 +207,16 @@ export default function SettingsScreen() {
 
       if (!res.ok) {
         const body = await res.json().catch(() => ({}));
-        // Email service not configured yet — invitation is still saved
         if (res.status === 503) {
-          Alert.alert(
-            "Invitation enregistrée",
-            `L'invitation pour ${email} est enregistrée. Pour envoyer un email automatique, configurez la clé RESEND_API_KEY dans les secrets.`
-          );
+          Alert.alert("Invitation enregistrée", `L'invitation pour ${email} est enregistrée. Configurez RESEND_API_KEY pour l'email.`);
         } else {
-          Alert.alert(
-            "Invitation enregistrée",
-            `L'invitation est sauvegardée mais l'email n'a pas pu être envoyé : ${body.error ?? "erreur inconnue"}.`
-          );
+          Alert.alert("Invitation enregistrée", `Sauvegardée mais email non envoyé : ${body.error ?? "erreur inconnue"}.`);
         }
       } else {
         Alert.alert("Invitation envoyée !", `Un email a été envoyé à ${email}.`);
       }
-    } catch (fetchErr) {
-      // Network error calling the API — invitation is still in DB
-      Alert.alert(
-        "Invitation enregistrée",
-        `L'invitation est sauvegardée mais l'email n'a pas pu être envoyé (erreur réseau).`
-      );
+    } catch {
+      Alert.alert("Invitation enregistrée", "Sauvegardée mais email non envoyé (erreur réseau).");
     }
 
     setInviting(false);
@@ -193,8 +237,12 @@ export default function SettingsScreen() {
     await fetchInvitations();
   };
 
+  // ── Render ─────────────────────────────────────────────────────────
+
   const topPad = Platform.OS === "web" ? 67 : insets.top;
   const bottomPad = Platform.OS === "web" ? 34 : insets.bottom;
+
+  const hourLabel = `${String(notifSettings.notifHour).padStart(2, "0")}:00`;
 
   return (
     <LinearGradient colors={["#EFF6FF", "#DBEAFE", "#BFDBFE"]} style={styles.flex}>
@@ -204,11 +252,13 @@ export default function SettingsScreen() {
       >
         <Text style={[styles.pageTitle, { color: colors.foreground }]}>{i18n.t("settings.title")}</Text>
 
+        {/* Account */}
         <Section title={i18n.t("settings.account")}>
           <Row icon="person-outline" label={i18n.t("settings.email")} value={user?.email ?? ""} />
           <Row icon="log-out-outline" label={i18n.t("auth.signOut")} onPress={signOut} danger last />
         </Section>
 
+        {/* Pending invitations */}
         {invitations.length > 0 && (
           <Section title={i18n.t("settings.pendingInvitations")}>
             {invitations.map((inv, idx) => (
@@ -242,6 +292,7 @@ export default function SettingsScreen() {
           </Section>
         )}
 
+        {/* Fridges */}
         <Section title={i18n.t("settings.fridges")}>
           {fridges.map((fridge, idx) => (
             <View
@@ -268,37 +319,80 @@ export default function SettingsScreen() {
           </TouchableOpacity>
         </Section>
 
+        {/* Notifications */}
         <Section title={i18n.t("settings.notifications.title")}>
+          {/* Push toggle */}
           <View style={styles.switchRow}>
             <Ionicons name="notifications-outline" size={20} color={colors.mutedForeground} style={styles.rowIcon} />
             <Text style={[styles.rowLabel, { color: colors.foreground }]}>{i18n.t("settings.notifications.push")}</Text>
-            <Switch value={pushEnabled} onValueChange={setPushEnabled} trackColor={{ true: colors.primary }} />
+            <Switch
+              value={notifSettings.pushEnabled}
+              onValueChange={handlePushToggle}
+              trackColor={{ true: colors.primary }}
+            />
           </View>
+
+          {/* Email toggle */}
           <View style={[styles.switchRow, { borderTopWidth: 1, borderTopColor: colors.border }]}>
             <Ionicons name="mail-outline" size={20} color={colors.mutedForeground} style={styles.rowIcon} />
             <Text style={[styles.rowLabel, { color: colors.foreground, flex: 1 }]}>{i18n.t("settings.notifications.email")}</Text>
-            <Switch value={emailEnabled} onValueChange={setEmailEnabled} trackColor={{ true: colors.primary }} />
+            <Switch
+              value={notifSettings.emailEnabled}
+              onValueChange={handleEmailToggle}
+              trackColor={{ true: colors.primary }}
+            />
           </View>
+
+          {/* Delay (days before expiry) */}
           <View style={[styles.row, { borderTopWidth: 1, borderTopColor: colors.border }]}>
-            <Ionicons name="time-outline" size={20} color={colors.mutedForeground} style={styles.rowIcon} />
+            <Ionicons name="calendar-outline" size={20} color={colors.mutedForeground} style={styles.rowIcon} />
             <Text style={[styles.rowLabel, { color: colors.foreground }]}>{i18n.t("settings.notifications.delay")}</Text>
             <View style={styles.delayBtns}>
               {NOTIFICATION_DELAY_OPTIONS.map(d => (
                 <TouchableOpacity
                   key={d}
-                  onPress={() => setNotifDelay(d)}
-                  style={[styles.delayBtn, notifDelay === d && { backgroundColor: colors.primary }]}
+                  onPress={() => handleDelayChange(d)}
+                  style={[
+                    styles.delayBtn,
+                    { borderColor: colors.border },
+                    notifSettings.daysThreshold === d && { backgroundColor: colors.primary, borderColor: colors.primary },
+                  ]}
                 >
-                  <Text style={[styles.delayBtnTxt, { color: notifDelay === d ? colors.primaryForeground : colors.mutedForeground }]}>
+                  <Text style={[
+                    styles.delayBtnTxt,
+                    { color: notifSettings.daysThreshold === d ? colors.primaryForeground : colors.mutedForeground },
+                  ]}>
                     {d}j
                   </Text>
                 </TouchableOpacity>
               ))}
             </View>
           </View>
+
+          {/* Hour picker */}
+          <View style={[styles.row, { borderTopWidth: 1, borderTopColor: colors.border }]}>
+            <Ionicons name="time-outline" size={20} color={colors.mutedForeground} style={styles.rowIcon} />
+            <Text style={[styles.rowLabel, { color: colors.foreground }]}>{i18n.t("settings.notifications.time")}</Text>
+            <View style={styles.hourControl}>
+              <TouchableOpacity
+                onPress={() => handleHourChange(-1)}
+                style={[styles.hourBtn, { backgroundColor: colors.secondary }]}
+              >
+                <Ionicons name="remove" size={16} color={colors.secondaryForeground} />
+              </TouchableOpacity>
+              <Text style={[styles.hourLabel, { color: colors.foreground }]}>{hourLabel}</Text>
+              <TouchableOpacity
+                onPress={() => handleHourChange(1)}
+                style={[styles.hourBtn, { backgroundColor: colors.secondary }]}
+              >
+                <Ionicons name="add" size={16} color={colors.secondaryForeground} />
+              </TouchableOpacity>
+            </View>
+          </View>
         </Section>
       </ScrollView>
 
+      {/* Create fridge modal */}
       <Modal visible={showCreateFridge} transparent animationType="slide" onRequestClose={() => setShowCreateFridge(false)}>
         <Pressable style={styles.modalOverlay} onPress={() => setShowCreateFridge(false)} />
         <View style={[styles.modalSheet, { backgroundColor: colors.card }]}>
@@ -349,6 +443,7 @@ export default function SettingsScreen() {
         </View>
       </Modal>
 
+      {/* Invite modal */}
       <Modal visible={showInviteModal} transparent animationType="slide" onRequestClose={() => setShowInviteModal(false)}>
         <Pressable style={styles.modalOverlay} onPress={() => setShowInviteModal(false)} />
         <View style={[styles.modalSheet, { backgroundColor: colors.card }]}>
@@ -385,6 +480,8 @@ export default function SettingsScreen() {
   );
 }
 
+// ── Styles ─────────────────────────────────────────────────────────────
+
 const styles = StyleSheet.create({
   flex: { flex: 1 },
   container: { paddingHorizontal: 20 },
@@ -403,12 +500,8 @@ const styles = StyleSheet.create({
   fridgeName: { flex: 1, fontSize: 15, fontFamily: "Inter_500Medium" },
   smallBtn: { width: 32, height: 32, borderRadius: 16, alignItems: "center", justifyContent: "center" },
   addFridgeBtn: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "center",
-    gap: 8,
-    padding: 14,
-    borderTopWidth: 1,
+    flexDirection: "row", alignItems: "center", justifyContent: "center",
+    gap: 8, padding: 14, borderTopWidth: 1,
   },
   addFridgeTxt: { fontSize: 14, fontFamily: "Inter_600SemiBold" },
   invRow: { flexDirection: "row", alignItems: "center", paddingHorizontal: 16, paddingVertical: 12, gap: 8 },
@@ -417,8 +510,15 @@ const styles = StyleSheet.create({
   invBtn: { paddingHorizontal: 10, paddingVertical: 6, borderRadius: 8 },
   invBtnText: { fontSize: 12, fontFamily: "Inter_600SemiBold" },
   delayBtns: { flexDirection: "row", gap: 6 },
-  delayBtn: { width: 32, height: 28, borderRadius: 8, alignItems: "center", justifyContent: "center" },
+  delayBtn: {
+    width: 32, height: 28, borderRadius: 8,
+    alignItems: "center", justifyContent: "center",
+    borderWidth: 1,
+  },
   delayBtnTxt: { fontSize: 12, fontFamily: "Inter_600SemiBold" },
+  hourControl: { flexDirection: "row", alignItems: "center", gap: 10 },
+  hourBtn: { width: 30, height: 30, borderRadius: 8, alignItems: "center", justifyContent: "center" },
+  hourLabel: { fontSize: 16, fontFamily: "Inter_600SemiBold", minWidth: 48, textAlign: "center" },
   modalOverlay: { flex: 1, backgroundColor: "rgba(0,0,0,0.4)" },
   modalSheet: { borderTopLeftRadius: 24, borderTopRightRadius: 24, padding: 24, paddingBottom: 40, gap: 16 },
   handle: { width: 40, height: 4, borderRadius: 2, alignSelf: "center", marginBottom: 8 },
@@ -427,7 +527,11 @@ const styles = StyleSheet.create({
   modalLabel: { fontSize: 13, fontFamily: "Inter_600SemiBold" },
   modalInput: { borderWidth: 1, borderRadius: 12, paddingHorizontal: 14, height: 48, fontSize: 15, fontFamily: "Inter_400Regular" },
   iconScroll: { marginHorizontal: -4 },
-  iconOpt: { width: 44, height: 44, borderRadius: 10, alignItems: "center", justifyContent: "center", marginHorizontal: 4, borderWidth: 1, borderColor: "transparent" },
+  iconOpt: {
+    width: 44, height: 44, borderRadius: 10,
+    alignItems: "center", justifyContent: "center",
+    marginHorizontal: 4, borderWidth: 1, borderColor: "transparent",
+  },
   iconOptTxt: { fontSize: 22 },
   colorRow: { flexDirection: "row", flexWrap: "wrap", gap: 10 },
   colorDot: { width: 32, height: 32, borderRadius: 16 },

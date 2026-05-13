@@ -123,6 +123,7 @@ export default {
       days: "Days",
       delay: "Days before expiry",
       days_before: "days before",
+      permissionDenied: "Please allow notifications in your phone settings.",
     },
     language: "Language",
     french: "Français",
