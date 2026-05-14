@@ -9,7 +9,7 @@ export const OPENFOODFACTS_BASE_URL = "https://world.openfoodfacts.org/api/v0/pr
 // API server — uses the Replit dev domain injected at build time
 const _domain = process.env.EXPO_PUBLIC_DOMAIN ?? "";
 export const API_BASE_URL = _domain
-  ? `https://${_domain}/api-server/api`
+  ? `https://${_domain}/api`
   : "http://localhost:8080/api";
 
 export const URGENCY_DAYS = {
