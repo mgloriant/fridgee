@@ -1,5 +1,5 @@
 import { Router } from "express";
-import { sendBrevoEmail, brevoSender } from "@/lib/brevo";
+import { sendBrevoEmail, brevoSender } from "../lib/brevo";
 
 const router = Router();
 
