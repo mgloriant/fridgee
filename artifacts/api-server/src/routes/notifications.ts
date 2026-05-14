@@ -1,5 +1,5 @@
 import { Router } from "express";
-import { Resend } from "resend";
+import { sendBrevoEmail, brevoSender } from "@/lib/brevo";
 
 const router = Router();
 
@@ -42,13 +42,11 @@ router.post("/notifications/send-email", async (req, res) => {
     return res.status(400).json({ error: "userEmail and items are required" });
   }
 
-  const apiKey = process.env["RESEND_API_KEY"];
-  if (!apiKey) {
-    return res.status(503).json({ error: "Email service not configured" });
+  const sender = brevoSender();
+  if (!sender.email) {
+    return res.status(503).json({ error: "Email service not configured (BREVO_SENDER_EMAIL missing)" });
   }
 
-  const resend = new Resend(apiKey);
-  const fromEmail = process.env["RESEND_FROM_EMAIL"] ?? "Mon Frigo <onboarding@resend.dev>";
   const count = items.length;
 
   const itemRows = items
@@ -91,13 +89,14 @@ router.post("/notifications/send-email", async (req, res) => {
       <h1 style="color: #60A5FA; font-size: 24px; margin: 0 0 6px;">Mon Frigo</h1>
       <p style="color: rgba(255,255,255,0.6); font-size: 13px; margin: 0;">Alerte péremption</p>
     </div>
-
     <div style="padding: 24px 32px;">
       <p style="color: #374151; font-size: 15px; line-height: 1.6; margin: 0 0 20px;">
         ${count} produit${count > 1 ? "s" : ""} dans votre frigo
-        ${daysThreshold === 0 ? "expire aujourd'hui" : `expire${count > 1 ? "nt" : ""} dans les <strong>${daysThreshold} prochain${daysThreshold > 1 ? "s" : ""} jour${daysThreshold > 1 ? "s" : ""}</strong>`} :
+        ${daysThreshold === 0
+          ? "expire aujourd'hui"
+          : `expire${count > 1 ? "nt" : ""} dans les <strong>${daysThreshold} prochain${daysThreshold > 1 ? "s" : ""} jour${daysThreshold > 1 ? "s" : ""}</strong>`
+        } :
       </p>
-
       <table style="width: 100%; border-collapse: collapse; background: #F8FAFC; border-radius: 12px; overflow: hidden;">
         <thead>
           <tr style="background: #F1F5F9;">
@@ -110,7 +109,6 @@ router.post("/notifications/send-email", async (req, res) => {
           ${itemRows}
         </tbody>
       </table>
-
       <p style="color: #94A3B8; font-size: 12px; margin: 20px 0 0; text-align: center;">
         Ouvrez l'application Mon Frigo pour gérer vos produits.
       </p>
@@ -119,22 +117,19 @@ router.post("/notifications/send-email", async (req, res) => {
 </body>
 </html>`.trim();
 
-  try {
-    const { error } = await resend.emails.send({
-      from: fromEmail,
-      to: userEmail,
-      subject: `Mon Frigo — ${count} produit${count > 1 ? "s" : ""} à consommer bientôt`,
-      html,
-    });
+  const result = await sendBrevoEmail({
+    sender,
+    to: [{ email: userEmail }],
+    subject: `Mon Frigo — ${count} produit${count > 1 ? "s" : ""} à consommer bientôt`,
+    htmlContent: html,
+  });
 
-    if (error) {
-      return res.status(500).json({ error: error.message });
-    }
-
-    return res.json({ success: true });
-  } catch (err: any) {
-    return res.status(500).json({ error: err.message ?? "Unknown error" });
+  if (!result.ok) {
+    req.log.error({ err: result.message }, "[notifications] Brevo error");
+    return res.status(result.status === 503 ? 503 : 500).json({ error: result.message });
   }
+
+  return res.json({ success: true, messageId: result.messageId });
 });
 
 export default router;
