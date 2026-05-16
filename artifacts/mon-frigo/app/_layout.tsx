@@ -6,7 +6,7 @@ import {
   useFonts,
 } from "@expo-google-fonts/inter";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { Stack, router } from "expo-router";
+import { Stack, router, usePathname } from "expo-router";
 import * as SplashScreen from "expo-splash-screen";
 import * as ExpoNotifications from "expo-notifications";
 import React, { useEffect, useRef } from "react";
@@ -23,6 +23,11 @@ import {
   scheduleExpiryNotifications,
   checkAndSendEmailNotification,
 } from "@/lib/notifications";
+import {
+  getPendingInvite,
+  clearPendingInvite,
+  acceptInviteToken,
+} from "@/lib/inviteUtils";
 
 // Configure how notifications appear while the app is in the foreground
 if (Platform.OS !== "web") {
@@ -82,15 +87,31 @@ function NotificationScheduler() {
 
 function AppNavigator() {
   const { user, loading } = useAuth();
+  const pathname = usePathname();
 
   useEffect(() => {
-    if (!loading) {
-      if (!user) {
+    if (loading) return;
+
+    if (!user) {
+      // Don't redirect away from the invite screen — it handles its own auth flow
+      if (pathname !== "/invite") {
         router.replace("/(auth)/login");
-      } else {
-        router.replace("/(tabs)/fridge");
       }
+      return;
     }
+
+    // User just logged in — accept any pending invite then go to fridge
+    if (pathname !== "/invite") {
+      (async () => {
+        const pending = await getPendingInvite();
+        if (pending?.token) {
+          await acceptInviteToken(pending.token);
+          await clearPendingInvite();
+        }
+        router.replace("/(tabs)/fridge");
+      })();
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user, loading]);
 
   return (
@@ -100,6 +121,7 @@ function AppNavigator() {
       <Stack.Screen name="scan" options={{ headerShown: false }} />
       <Stack.Screen name="session" options={{ headerShown: false }} />
       <Stack.Screen name="item" options={{ headerShown: false }} />
+      <Stack.Screen name="invite" options={{ headerShown: false }} />
     </Stack>
   );
 }

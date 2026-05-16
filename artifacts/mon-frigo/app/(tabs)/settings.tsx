@@ -203,6 +203,7 @@ export default function SettingsScreen() {
           inviterEmail: user.email,
           fridgeName: inviteFridge.name,
           fridgeIcon: inviteFridge.icon,
+          token,
         }),
       });
 
